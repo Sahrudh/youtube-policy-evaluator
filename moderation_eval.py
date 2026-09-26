@@ -11,10 +11,32 @@ from pydantic import BaseModel, Field
 from sklearn.metrics import classification_report, confusion_matrix
 import pandas as pd
 
-# 1. Initialize Client
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# 1. Initialize Client (Universal: works on Colab, local laptop, and servers)
+GEMINI_API_KEY = None
+
+# A. Check Google Colab Secrets first
+try:
+    from google.colab import userdata
+    GEMINI_API_KEY = userdata.get("GEMINI_API_KEY")
+except ImportError:
+    pass
+
+# B. Check local .env file next (for local machines)
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set.")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    except ImportError:
+        GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# C. Hard stop if neither was found
+if not GEMINI_API_KEY:
+    raise ValueError(
+        "GEMINI_API_KEY not found! Please either:\n"
+        "1. Add it to Colab Secrets (the key icon 🔑), OR\n"
+        "2. Put it in a .env file locally: GEMINI_API_KEY=your_key"
+    )
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 

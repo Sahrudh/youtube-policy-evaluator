@@ -3,6 +3,10 @@ Async LLM moderation &amp; adversarial evaluation pipeline using Gemini and Pyda
 
 # YouTube Policy Violation Classifier & Adversarial Evaluator
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Pydantic v2](https://img.shields.io/badge/pydantic-v2-green.svg)](https://docs.pydantic.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 An automated Trust & Safety moderation and evaluation pipeline built on **Gemini 3.5 Flash**. This project classifies user comments and transcripts against YouTube Community Guidelines (**Harassment**, **Spam**, **Hate Speech**) while minimizing false positives on aggressive gaming slang and harsh creator feedback.
 
 ---
@@ -79,6 +83,10 @@ HARASSMENT      0           7     0            0
 SPAM            0           0     7            0
 HATE_SPEECH     0           0     0            8
 ```
+### Error Analysis & Boundary Limitations
+- **False Negative on Nuanced Sarcasm (`h_06`):** The model occasionally assigned `NONE` to passive-aggressive backhanded compliments containing no direct slurs.
+- **Remediation:** Added few-shot disambiguation in `SYSTEM_INSTRUCTION` contrasting aggressive sarcasm against genuine creator praise.
+
 ## Output Schema Example
 
 The model is constrained via Pydantic to enforce the following deterministic JSON response structure:
@@ -126,8 +134,12 @@ pip install -r requirements.txt
 ```
 ### 4. Configure Your API Key
 
-Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey?utm_source=gemini).
+1. Get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Create a file named `.env` in the root folder of the project:
 
+```bash
+echo "GEMINI_API_KEY=your_actual_key_here" > .env
+```
 #### macOS/Linux
 ```bash
 export GEMINI_API_KEY="your-gemini-api-key-here"

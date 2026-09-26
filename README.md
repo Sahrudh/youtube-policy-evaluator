@@ -162,5 +162,26 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 ### 5. Run the Evaluator
 ```bash
-python main.py
+python moderation_eval.py
+```
+
+## Execution Modes
+
+Run the evaluator across different workflows using command-line arguments:
+
+### 1. Batch Adversarial Evaluation (Default)
+Runs the concurrent evaluation benchmark ($N=30$) and prints metrics:
+```bash
+python moderation_eval.py
+```
+### 2. Interactive Testing Console
+Launches a live REPL to test individual comments:
+
+```bash
+python moderation_eval.py --interactive
+```
+### 3. Direct Comment Check
+Evaluates a single comment directly:
+```bash
+python moderation_eval.py --comment "This boss fight is cancer to play through."
 ```

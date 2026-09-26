@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 import sys
@@ -11,7 +12,9 @@ from pydantic import BaseModel, Field
 from sklearn.metrics import classification_report, confusion_matrix
 import pandas as pd
 
-# 1. Initialize Client (Universal: works on Colab, local laptop, and servers)
+# =====================================================================
+# 1. Initialize Client (Universal: Colab, local laptop, and servers)
+# =====================================================================
 GEMINI_API_KEY = None
 
 # A. Check Google Colab Secrets first
@@ -40,7 +43,9 @@ if not GEMINI_API_KEY:
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 2. Schema
+# =====================================================================
+# 2. Output Schema Definition (Strict Pydantic)
+# =====================================================================
 class ViolationCategory(str, Enum):
     NONE = "NONE"
     HARASSMENT = "HARASSMENT"
@@ -61,7 +66,9 @@ class ModerationResult(BaseModel):
     action: Action = Field(description="APPROVE, FLAG, or REMOVE.")
     flagged_tokens: List[str] = Field(default_factory=list, description="Specific terms triggering violation.")
 
-# 3. System Instruction
+# =====================================================================
+# 3. System Instructions
+# =====================================================================
 SYSTEM_INSTRUCTION = """
 You are an expert Content Moderation AI evaluating YouTube comments.
 Categorize text against YouTube Community Guidelines with high precision.
@@ -76,7 +83,9 @@ Rules:
 De-obfuscate leetspeak (e.g., 'k!ll', 'h4te'), phonetic masking ('fck', 'b1tch'), and spaced URLs.
 """
 
+# =====================================================================
 # 4. Expanded Adversarial Benchmark (30 samples)
+# =====================================================================
 EXPANDED_DATASET = [
     # --- NONE (Hard Negatives: vulgarity, video critique, idioms) ---
     {"id": "n_01", "text": "This code is absolute trash, refactor the entire thing.", "ground_truth": ViolationCategory.NONE},
@@ -117,57 +126,68 @@ EXPANDED_DATASET = [
     {"id": "hs_08", "text": "Trans people should be locked up in mental institutions.", "ground_truth": ViolationCategory.HATE_SPEECH},
 ]
 
-# 5. Async Classifier with Exponential Backoff
-semaphore = asyncio.Semaphore(3)  # Max 3 concurrent requests to respect quotas
+# =====================================================================
+# 5. Core Classification Logic (Async + Backoff)
+# =====================================================================
+semaphore = asyncio.Semaphore(3)
+
+async def run_inference(text: str) -> Optional[ModerationResult]:
+    """Sends text to Gemini with structured output validation."""
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        temperature=0.0,
+        response_mime_type="application/json",
+        response_schema=ModerationResult,
+    )
+    
+    for attempt in range(3):
+        try:
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f'Comment: "{text}"',
+                config=config,
+            )
+            return ModerationResult.model_validate_json(response.text)
+        except Exception:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(2 ** attempt)
+    return None
 
 async def classify_comment_async(item: dict) -> dict:
     async with semaphore:
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.0,
-            response_mime_type="application/json",
-            response_schema=ModerationResult,
-        )
-        
-        for attempt in range(3):
-            try:
-                response = await client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=f"Comment: \"{item['text']}\"",
-                    config=config,
-                )
-                parsed = ModerationResult.model_validate_json(response.text)
-                return {
-                    "id": item["id"],
-                    "text": item["text"],
-                    "ground_truth": item["ground_truth"].value,
-                    "predicted": parsed.category.value,
-                    "confidence": parsed.confidence_score,
-                    "action": parsed.action.value,
-                    "reasoning": parsed.chain_of_thought,
-                }
-            except Exception as e:
-                if attempt == 2:
-                    return {
-                        "id": item["id"],
-                        "text": item["text"],
-                        "ground_truth": item["ground_truth"].value,
-                        "predicted": "ERROR",
-                        "confidence": 0.0,
-                        "action": "ERROR",
-                        "reasoning": str(e),
-                    }
-                await asyncio.sleep(2 ** attempt)
+        try:
+            parsed = await run_inference(item["text"])
+            return {
+                "id": item["id"],
+                "text": item["text"],
+                "ground_truth": item["ground_truth"].value,
+                "predicted": parsed.category.value,
+                "confidence": parsed.confidence_score,
+                "action": parsed.action.value,
+                "reasoning": parsed.chain_of_thought,
+            }
+        except Exception as e:
+            return {
+                "id": item["id"],
+                "text": item["text"],
+                "ground_truth": item["ground_truth"].value,
+                "predicted": "ERROR",
+                "confidence": 0.0,
+                "action": "ERROR",
+                "reasoning": str(e),
+            }
 
-# 6. Run & Evaluate
-async def main():
+# =====================================================================
+# 6. Evaluation Benchmark Mode
+# =====================================================================
+async def run_evaluation():
     print(f"Evaluating {len(EXPANDED_DATASET)} samples concurrently...")
     tasks = [classify_comment_async(item) for item in EXPANDED_DATASET]
     results = await asyncio.gather(*tasks)
     
     df = pd.DataFrame(results)
     
-    # Display Results Summary Table
     print("\n" + "=" * 80)
     print(f"{'ID':<6} | {'Ground Truth':<12} | {'Predicted':<12} | {'Pass?':<6} | {'Confidence':<10}")
     print("-" * 80)
@@ -186,12 +206,72 @@ async def main():
     cm_df = pd.DataFrame(cm, index=labels, columns=labels)
     print(cm_df)
 
-# Execute in notebook cell or CLI script
+# =====================================================================
+# 7. Single Comment & Interactive Modes
+# =====================================================================
+async def test_single_comment(comment_text: str):
+    print(f"\n🔍 Analyzing comment: \"{comment_text}\"...")
+    try:
+        verdict = await run_inference(comment_text)
+        if not verdict:
+            print("❌ Failed to receive verdict.")
+            return
+
+        print("\n" + "=" * 55)
+        print("                🛡️  MODERATION VERDICT")
+        print("=" * 55)
+        print(f"💬 Comment:          {comment_text}")
+        print(f"🏷️  Category:         {verdict.category.value}")
+        print(f"⚖️  Action:           {verdict.action.value}")
+        print(f"📊 Confidence:       {verdict.confidence_score * 100:.1f}%")
+        print(f"🚩 Flagged Tokens:   {verdict.flagged_tokens if verdict.flagged_tokens else 'None'}")
+        print("-" * 55)
+        print(f"🧠 Chain of Thought:\n{verdict.chain_of_thought}")
+        print("=" * 55 + "\n")
+    except Exception as e:
+        print(f"❌ Error evaluating comment: {e}")
+
+async def interactive_console():
+    print("\n💡 INTERACTIVE MODERATION TESTER READY")
+    print("Type any comment below to test against YouTube Community Guidelines.")
+    print("Type 'exit' or 'q' to quit.\n")
+    
+    while True:
+        try:
+            user_input = input("Enter a comment: ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ["exit", "q", "quit"]:
+                print("Exiting console.")
+                break
+            await test_single_comment(user_input)
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting console.")
+            break
+
+# =====================================================================
+# 8. Entrypoint (Supports Notebooks & CLI Flags)
+# =====================================================================
+async def entrypoint():
+    parser = argparse.ArgumentParser(description="YouTube Policy Moderation & Evaluator")
+    parser.add_argument("--interactive", "-i", action="store_true", help="Launch interactive testing console.")
+    parser.add_argument("--comment", "-c", type=str, help="Classify a single comment via command-line argument.")
+    parser.add_argument("--eval", "-e", action="store_true", help="Run the automated test benchmark.")
+
+    # parse_known_args prevents notebook runtime args from triggering errors in Colab
+    args, _ = parser.parse_known_args()
+
+    if args.interactive:
+        await interactive_console()
+    elif args.comment:
+        await test_single_comment(args.comment)
+    else:
+        # Default behavior: run benchmark evaluation
+        await run_evaluation()
+
 if __name__ == "__main__":
     try:
-        # Standard Jupyter / IPython running loop check
         loop = asyncio.get_running_loop()
-        task = loop.create_task(main())
+        loop.create_task(entrypoint())
     except RuntimeError:
-        # Standalone Python script execution
-        asyncio.run(main())
+        asyncio.run(entrypoint())
